@@ -1,27 +1,33 @@
 import os
 import logging
+import requests
 from aiohttp import web
-from telegram import Bot, Update
-from telegram.ext import Application, CommandHandler, ContextTypes
+from telegram import Update, Bot
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    ContextTypes,
+)
 
-logging.basicConfig(level=logging.INFO)
+# Логгирование
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
 
+# Получаем переменные окружения
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 WEBHOOK_URL = os.getenv('WEBHOOK_URL')
+PORT = int(os.getenv('PORT', '8080'))
 
 if not TELEGRAM_TOKEN or not TMDB_API_KEY or not WEBHOOK_URL:
-    raise RuntimeError("Ошибка: TELEGRAM_TOKEN, TMDB_API_KEY и WEBHOOK_URL должны быть заданы в переменных окружения")
+    logger.error("TELEGRAM_TOKEN, TMDB_API_KEY и WEBHOOK_URL должны быть заданы!")
+    exit(1)
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "Привет! Я Кинобот.\n"
-        "Чтобы найти фильм — напиши /film название фильма\n"
-        "Чтобы найти сериал — напиши /tv название сериала"
-    )
-
+# Функция поиска в TMDB
 def tmdb_search(query: str, media_type='movie'):
-    import requests
     url = f'https://api.themoviedb.org/3/search/{media_type}'
     params = {
         'api_key': TMDB_API_KEY,
@@ -31,6 +37,7 @@ def tmdb_search(query: str, media_type='movie'):
     }
     resp = requests.get(url, params=params)
     if resp.status_code != 200:
+        logger.warning(f"TMDB API error: {resp.status_code}")
         return None
     data = resp.json()
     results = data.get('results')
@@ -38,9 +45,18 @@ def tmdb_search(query: str, media_type='movie'):
         return results[0]
     return None
 
+# Команды бота
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text(
+        "Привет! Я Кинобот.\n"
+        "Используй команды:\n"
+        "/film название_фильма — поиск фильма\n"
+        "/tv название_сериала — поиск сериала"
+    )
+
 async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Пожалуйста, укажи название фильма после команды /film")
+        await update.message.reply_text("Укажи название фильма после команды /film")
         return
     query = ' '.join(context.args)
     movie = tmdb_search(query, 'movie')
@@ -54,8 +70,7 @@ async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     poster_path = movie.get('poster_path')
     poster_url = f'https://image.tmdb.org/t/p/w500{poster_path}' if poster_path else None
 
-    text = f"🎬 <b>{title}</b>\n\n⭐ Рейтинг: {rating}\n\n{overview}"
-
+    text = f"🎬 <b>{title}</b>\n⭐ Рейтинг: {rating}\n\n{overview}"
     if poster_url:
         await update.message.reply_photo(photo=poster_url, caption=text, parse_mode='HTML')
     else:
@@ -63,68 +78,70 @@ async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def search_tv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("Пожалуйста, укажи название сериала после команды /tv")
+        await update.message.reply_text("Укажи название сериала после команды /tv")
         return
     query = ' '.join(context.args)
-    tv_show = tmdb_search(query, 'tv')
-    if not tv_show:
+    tv = tmdb_search(query, 'tv')
+    if not tv:
         await update.message.reply_text("Сериал не найден")
         return
 
-    title = tv_show.get('name', 'Без названия')
-    overview = tv_show.get('overview', 'Описание недоступно.')
-    rating = tv_show.get('vote_average', '—')
-    poster_path = tv_show.get('poster_path')
+    title = tv.get('name', 'Без названия')
+    overview = tv.get('overview', 'Описание недоступно.')
+    rating = tv.get('vote_average', '—')
+    poster_path = tv.get('poster_path')
     poster_url = f'https://image.tmdb.org/t/p/w500{poster_path}' if poster_path else None
 
-    text = f"📺 <b>{title}</b>\n\n⭐ Рейтинг: {rating}\n\n{overview}"
-
+    text = f"📺 <b>{title}</b>\n⭐ Рейтинг: {rating}\n\n{overview}"
     if poster_url:
         await update.message.reply_photo(photo=poster_url, caption=text, parse_mode='HTML')
     else:
         await update.message.reply_text(text, parse_mode='HTML')
 
-async def handle_update(request):
-    """Обработка обновления от Telegram (webhook)."""
+# Обработчик webhook запросов от Telegram
+async def handle_update(request: web.Request):
     bot: Bot = request.app['bot']
-    application: Application = request.app['application']
     data = await request.json()
     update = Update.de_json(data, bot)
-    await application.process_update(update)
-    return web.Response(text='ok')
+    application: Application = request.app['application']
+    await application.update_queue.put(update)
+    return web.Response(text='OK')
 
-async def on_startup(app):
+# Запуск и настройка aiohttp + telegram bot
+async def on_startup(app: web.Application):
+    logger.info("Запускаем бота и настраиваем webhook...")
     bot = Bot(token=TELEGRAM_TOKEN)
     app['bot'] = bot
 
-    application = Application.builder().bot(bot).build()
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("film", search_movie))
-    application.add_handler(CommandHandler("tv", search_tv))
-
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
     app['application'] = application
 
-    # Установка webhook на Telegram
-    await bot.set_webhook(WEBHOOK_URL)
-    logging.info(f"Webhook установлен: {WEBHOOK_URL}")
+    application.add_handler(CommandHandler('start', start))
+    application.add_handler(CommandHandler('film', search_movie))
+    application.add_handler(CommandHandler('tv', search_tv))
 
-async def on_cleanup(app):
-    bot = app['bot']
+    await application.initialize()
+    await application.start()
+    await bot.set_webhook(WEBHOOK_URL)
+    logger.info(f"Webhook установлен на {WEBHOOK_URL}")
+
+async def on_cleanup(app: web.Application):
+    logger.info("Чистим за ботом...")
+    bot: Bot = app['bot']
+    application: Application = app['application']
     await bot.delete_webhook()
-    logging.info("Webhook удалён")
+    await application.stop()
+    await application.shutdown()
+    logger.info("Бот остановлен.")
 
 def main():
-    port = int(os.environ.get('PORT', '8080'))
     app = web.Application()
-
     app.router.add_post(f'/{TELEGRAM_TOKEN}', handle_update)
-
     app.on_startup.append(on_startup)
     app.on_cleanup.append(on_cleanup)
 
-    logging.info(f"Запуск веб-сервера на порту {port}")
-    web.run_app(app, port=port)
+    logger.info(f"Запуск сервера на порту {PORT}")
+    web.run_app(app, port=PORT)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
