@@ -4,25 +4,21 @@ import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, CommandHandler, ContextTypes
 
-# Включаем логирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
 
-# Читаем токены из переменных окружения
 TELEGRAM_TOKEN = os.getenv('TELEGRAM_TOKEN')
 TMDB_API_KEY = os.getenv('TMDB_API_KEY')
 
-# Команда /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "Привет! Я Кинобот 🎬\n\n"
-        "🔍 Чтобы найти фильм: /фильм Название\n"
-        "📺 Чтобы найти сериал: /сериал Название"
+        "🔍 Чтобы найти фильм: /film Название\n"
+        "📺 Чтобы найти сериал: /serial Название"
     )
 
-# Функция поиска на TMDB
 def tmdb_search(query, media_type='movie'):
     url = f'https://api.themoviedb.org/3/search/{media_type}'
     params = {
@@ -38,10 +34,9 @@ def tmdb_search(query, media_type='movie'):
     data = response.json()
     return data['results'][0] if data.get('results') else None
 
-# Обработка команды /фильм
 async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("❗ Укажи название фильма: /фильм Название")
+        await update.message.reply_text("❗ Укажи название фильма: /film Название")
         return
     query = ' '.join(context.args)
     film = tmdb_search(query, 'movie')
@@ -61,10 +56,9 @@ async def search_movie(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(text, parse_mode='HTML')
 
-# Обработка команды /сериал
 async def search_tv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
-        await update.message.reply_text("❗ Укажи название сериала: /сериал Название")
+        await update.message.reply_text("❗ Укажи название сериала: /serial Название")
         return
     query = ' '.join(context.args)
     tv_show = tmdb_search(query, 'tv')
@@ -84,7 +78,6 @@ async def search_tv(update: Update, context: ContextTypes.DEFAULT_TYPE):
     else:
         await update.message.reply_text(text, parse_mode='HTML')
 
-# Запуск бота
 def main():
     if not TELEGRAM_TOKEN or not TMDB_API_KEY:
         print("❌ Ошибка: переменные окружения TELEGRAM_TOKEN и TMDB_API_KEY должны быть заданы!")
@@ -93,8 +86,8 @@ def main():
     app = ApplicationBuilder().token(TELEGRAM_TOKEN).build()
 
     app.add_handler(CommandHandler('start', start))
-    app.add_handler(CommandHandler('фильм', search_movie))
-    app.add_handler(CommandHandler('сериал', search_tv))
+    app.add_handler(CommandHandler('film', search_movie))
+    app.add_handler(CommandHandler('serial', search_tv))
 
     logging.info("🤖 Бот запущен")
     app.run_polling()
